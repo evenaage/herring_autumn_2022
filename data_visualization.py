@@ -1,18 +1,18 @@
-from random import lognormvariate
-from time import sleep
-from tokenize import PlainToken
 import pandas as pd
 import geopandas as gpd
 import re
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
+import plotly.express as px
+
 fig, ax = plt.subplots()
 catch_data = pd.read_csv('fangstdata\elektronisk-rapportering-ers-2018-fangstmelding-dca.csv',delimiter=';', on_bad_lines='skip', encoding='utf8')
 #print(catch_data.columns)
 
 countries = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
 herring_catches = catch_data.loc[catch_data['Art - FDIR'] == 'Sild']
-countries[countries['name'] == 'Norway'].plot(color='lightgrey', ax = ax)
+#herring_catches.loc['Startposisjon bredde'] = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Startposisjon bredde']])
+#herring_catches.loc['Startposisjon lengde'] = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Startposisjon lengde']])
 longitude = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Startposisjon bredde']])
 latitude = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Startposisjon lengde']])
 
@@ -40,8 +40,13 @@ def update(val):
     latitude = pd.to_numeric([pos.replace(',','.') for pos in latitude])
     plt.scatter(latitude, longitude, marker='.', alpha=.3)
 
-for i in range(1,13):
-    update(i)
+#for i in range(1,13):
+#    update(i)
 
 #month_slider.on_changed(update)
-plt.show()
+plotter = {'latitude' : latitude, 'longitude': longitude}
+
+fig = px.density_mapbox(plotter, lat='longitude', lon='latitude',mapbox_style='stamen-terrain', opacity=.7, radius=5, title="Sildefangst 2018")
+fig.show()
+
+#plt.show()
