@@ -17,6 +17,7 @@ longitude = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Star
 latitude = pd.to_numeric([pos.replace(',','.') for pos in herring_catches['Startposisjon lengde']])
 Rundvekt = pd.to_numeric([vekt for vekt in herring_catches['Rundvekt']])
 
+
 #herring_catches[:1000].plot.scatter(x='Startposisjon lengde', y='Startposisjon bredde', xlim=[0,90], ylim = [0,90], ax=ax)
 #global plot
 #plot = plt.scatter(latitude, longitude, marker='.')
@@ -48,9 +49,10 @@ print(Rundvekt)
 for i in range(len(Rundvekt)):
     if Rundvekt[i] == 0:
         Rundvekt[i] = 1
-plotter = {'latitude' : latitude, 'longitude': longitude}
+plotter = {'latitude' : latitude, 'longitude': longitude, 'Rundvekt':Rundvekt}
 
-fig = px.density_mapbox(plotter, lat='longitude', lon='latitude',mapbox_style='stamen-terrain', opacity=.7, radius=5, title="Sildefangst 2018")
+#fig = px.density_mapbox(plotter, lat='longitude', lon='latitude',mapbox_style='stamen-terrain', opacity=.7, radius=5, title="Sildefangst 2018")
+fig = px.scatter_geo(plotter, lat='longitude', lon='latitude', size='Rundvekt',mapbox_style='stamen-terrain', title='Sildefangst 2018')
 fig.show()
 
 #plt.show()
