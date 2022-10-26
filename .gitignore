@@ -4,10 +4,6 @@ litteratur
 cleaned_datasets
 *.nc
 sinmod_model_data
-<<<<<<< HEAD
 *.mp4
 *.csv
 *model_data_exercise*
-=======
-*.csv
->>>>>>> 76756e92eb37889aea043c7889ba301c2f862169
