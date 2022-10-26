@@ -6,3 +6,4 @@ cleaned_datasets
 sinmod_model_data
 *.mp4
 *.csv
+*model_data_exercise*
