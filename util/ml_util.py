@@ -1,3 +1,4 @@
+from turtle import circle
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import numpy as np
@@ -152,7 +153,7 @@ def get_relevant_catch_data_csv(path_to_dataset, year, month, day = None, hour =
     Returns
     -------
         data : pd.DataFrame
-            The acquired data. Columns in dataframe include: 'latitude', 'longitude', 'rundvekt' and 'start_date' (str) and 'end_date', in addition to 'year' (int), month (int), day(int) and hour(s), if provided. Other columns depend on what type of data is read.
+            The acquired data. Columns in dataframe include: 'Registreringsmerke', 'latitude', 'longitude', 'rundvekt' and 'start_date' (str) and 'end_date', in addition to 'year' (int), month (int), day(int) and hour(s), if provided. Other columns depend on what type of data is read.
 
     Raises
     ------
@@ -172,14 +173,14 @@ def get_relevant_catch_data_csv(path_to_dataset, year, month, day = None, hour =
     return day_data
     
 
-def get_relevant_data_nc(path_to_dataset, variables, year, month, day, hour = None, DEPTH_LAYERS=15):
+def get_relevant_data_nc(dataset, variables, hour = None, take_avg_of_depth_layers=True, DEPTH_LAYERS=15):
     '''
     A function to filter out the relevant data from a .nc file, in order to match them to catch data.
 
     Parameters
     ----------
-    path_to_dataset : str
-        Path to the dataset that is to be filtered. Has to be path to a folder of .nc files on the format: 'samples_year_month_date.nc'
+    dataset : .nc file
+        Dataset to sift through
     variables: list[str]
         List of strings that correspond to variables in nc file
     year : int
@@ -196,51 +197,201 @@ def get_relevant_data_nc(path_to_dataset, variables, year, month, day, hour = No
 
     '''
     XC, YC = 620, 941
-    month = '0'+str(month) if month < 10 else str(month)
-    day = '0'+str(day) if day < 10 else str(day)
-    filename = 'samples_'+ str(year) + '.' + str(month) + '.' + str(day) + '_nonoverlap.nc'
-
 
     try:
-        nc = Dataset(os.path.join(path_to_dataset, filename))
+        nc = dataset
         hour = range(0,24) if hour == None else hour
-
+        #print(nc['gridLats'][0][0], nc['gridLons'][0][0],nc['gridLats'][-1][-1], nc['gridLons'][-1][-1])
         array_shape = (len(variables),1 if isinstance(hour, int) else len(hour), DEPTH_LAYERS,620, 941 )
         data =np.zeros(array_shape)
         for i, var in enumerate(variables):
-            data[i,:,:,:,:] = nc[var][hour, 0:DEPTH_LAYERS,:,:]
-
-        return data
+            try:
+                data[i,:,:,:,:] = nc[var][hour, 0:DEPTH_LAYERS,:,:]
+                #print(nc[var][hour, 0:DEPTH_LAYERS,:,:].shape)
+            except:
+                d = nc[var][hour, :,:]
+                #print(d.shape)
+                d = np.expand_dims(d, 0)
+                #print(d.shape)
+                data[i,:,:,:,:] = d #this data des not have depth layers, e.g. wind
+        if take_avg_of_depth_layers :data = average_depth_data(data, 2)
+        return data[:,0,:,:] #remove depth data, that layer is only 1 var and therefore superflous
     except Exception as e:
         print(e)
         print('Dataset not found. Check path and/or date')
         return None
+
+def localize_nc_file(path_to_dataset, year, month, day):
     
+    month = '0'+str(month) if month < 10 else str(month)
+    day = '0'+str(day) if day < 10 else str(day)
+    filename = 'samples_'+ str(year) + '.' + str(month) + '.' + str(day) + '_nonoverlap.nc'
+    return os.path.join(path_to_dataset, filename)
     
+def average_depth_data(data, depth_layer_index):
+    '''
+    Averages depth layers to reduce dimension of input data.
+
+    Parameters
+    ----------
+    data: np.array
+        Array of data
+    depth_layer_index: int
+        index of depth layers
+
+    Returns
+    -------
+    mean_data: np.array
+        array where depth data is averaged
+    '''
+    FILL_VALUE = -32768
+    masked =np.ma.masked_values(data, FILL_VALUE)
+    mean_data = np.mean(masked, depth_layer_index)
+    return mean_data
+
+
+def find_data(data, index):
+    '''
+    Function to find data from the "closest" grid cell in case data is missing.
+
+    '''
+    FILL_VALUE = -32768
+
+    def circle_around(data, index, step_length): #circle around grid cell, with greater step length to hit new ells
+        #print(index)
+        for i in range(1, step_length+1):
+            index[1] -= 1 #walk down
+            values = data[:,index[1], index[0]]
+            if FILL_VALUE not in values:
+                return values
+        for i in range(1, step_length+1):
+            index[0] +=1 #walk right
+            values = data[:,index[1], index[0]]
+            if FILL_VALUE not in values:
+                return values
+        for i in range(1, step_length+1):
+            index[1] += 1 #walk up
+            values = data[:,index[1], index[0]]
+            if FILL_VALUE not in values:
+                return values
+        for i in range(1, step_length+1):
+            index[0] -= 1 #walk left
+            values = data[:,index[1], index[0]]
+            if FILL_VALUE not in values:
+                return values
+        index[0] -= 1
+        index[1] +=1 
+        return circle_around(data, index, 2*step_length) #double step length to circle around
+
     
+
+    values = data[:,index[1], index[0]]
+    if FILL_VALUE in values: return circle_around(data, list((index[0] -1, index[1] +1)), step_length=2)
+    else: return values
+
+
+def get_vessel_track_data(df, reg, måned, dag):
+    '''
+    A function to filter out the relevant vessel track data and return them as a df. Does not care wether fish are caught or not.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        a pandas dataframe with multiple vessel track data for a specific year
+    reg: str
+        registration number of vessel to track (Registreringsmerke)
+    måned: int
+        month of which we want vessel data
+    dag: int
+        day of which we want vessel data
+    
+    Returns
+    -------
+    df: pd.DataFrame
+        A dataframe containing the vessel data for the specific day. Also adds columns 'month', 'day', and 'hour', in 
+        addition to translate lons and lats to numeric.
+    '''
+    tracks = df[df['Registreringsmerke'] == reg]
+    tidspunkter = tracks['Tidspunkt (UTC)']
+    tracks_correct_day = []
+    #for tid in tidspunkter:
+    tracks_correct_day =[int(tid.split()[0].split('.')[0]) == dag \
+        and int(tid.split(' ')[0].split('.')[1]) == måned for tid in tidspunkter]
+    #print(tracks_correct_day)
+    if len(tracks_correct_day) == 0:
+        return None
+    tracks = tracks.iloc[tracks_correct_day]
+    #print(tracks)
+    tidspunkter = tracks['Tidspunkt (UTC)']
+    tracks['month'] = [int(tid.split(' ')[0].split('.')[1]) for tid in tidspunkter]
+    tracks['day'] = [int(tid.split(' ')[0].split('.')[0]) for tid in tidspunkter]
+    tracks['hour'] = [int(tid.split()[1].split(':')[0]) for tid in tidspunkter]
+    tracks['longitude'] = pd.to_numeric(tracks['Breddegrad'])
+    tracks['latitude'] = pd.to_numeric(tracks['Lengdegrad'])
+    return tracks
+
+
+    
+#def validate(predicted, )
 
 
 if __name__ == '__main__': 
-    #pred = np.load('test_prediction', allow_pickle=True)
-    #print_on_map(pred)
-    #plt.show()
-    variables = ['temperature','u_east', 'v_north', 'salinity'] #, 'w_north', 'w_east,', 'w_velocity']
-    data = get_relevant_data_nc('nor4km_data',variables,2020, 1, 1, 12) #PROBLEM: DATA ALWAYS MISSING
-    Y = get_relevant_catch_data_csv('cleaned_datasets', 2020,1,5 )
-    predictive_oceanographic_variables = []
-    print(data.shape)
-    for index, catch in Y.iterrows():
-        x, y = ll2xy(catch['latitude'], catch['longitude'])
-        print(data[:,0,0, y,x])
-        predictive_oceanographic_variables.append(data[:,0,0, y,x])
-    print(np.array(predictive_oceanographic_variables))
-    pred = Y['Rundvekt'].to_numpy()
-    print(pred)
-    print_on_map(data[0,0,0,:,:], catch_data=Y)
+    VARIABLES = ['temperature','u_east', 'v_north', 'salinity', 'w_north', 'w_east']
+    JANUARY =1
+    vessel_dataframe_2020 = pd.read_csv('vessel_data\VMS_2020.csv',delimiter=';', on_bad_lines='skip')
+
+
+    #in this loop, we stack both positive and assumed negative observations of herring in data, so we can train on them
+    for day in range(1,2): #get data from some of january
+        print('Day:', day)
+        nc = Dataset(localize_nc_file('nor4km_data',2020, JANUARY,day ))
+        Y = get_relevant_catch_data_csv('cleaned_datasets', 2020,JANUARY,day )
+
+        predictive_oceanographic_variables = []
+        target = []
+        catches = []
+        for index, catch in Y.iterrows():
+            catches.append(catch)
+            regnr = catch['Registreringsmerke']
+
+            vessel_data = get_vessel_track_data(vessel_dataframe_2020,regnr,JANUARY, day)
+
+            if not isinstance(vessel_data,pd.DataFrame): continue
+            
+            catch_start = catch['fangststart']
+            catch_stop = catch['fangstslutt']
+            catch_hours = range(catch_start, catch_stop+1)
+
+            catch_duration_hours = catch_stop - catch_start +1
+            catch_amount = catch['Rundvekt'] / catch_duration_hours #add this to make data a bit smaller
+
+            #add oceanic data for catch and non-catch hours. This is not independent data, maybe the day is over, maybe \
+            # the boat is full, maybe they are going out to fish and not looking at echosounder. WIll include anyway,
+            # as its better than no data.
+            print('Adding hours:')
+            for index, row in vessel_data.iterrows():
+                #print(row)
+                hour = row['hour']
+                print(regnr, hour)
+                data = get_relevant_data_nc(nc, VARIABLES,hour) #get month/day/hour data
+                #print(type(row['latitude']), row['longitude'])
+                x,y = ll2xy( row['longitude'], row['latitude']) #get x and y coord from lat and long
+                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
+
+                if hour in catch_hours:     #add catch. actual catch or 0
+                    target.append(catch_amount) 
+                else:
+                    target.append(0) 
+        
+            
+    print(np.array(predictive_oceanographic_variables).shape)
+    target = np.array(target)
+    #print(pred)
+    print_on_map(data[0,:,:], catch_data=catches)
     plt.show()
     model = LinearRegression()
-    model.fit(predictive_oceanographic_variables, pred)
-    r_sq = model.score(predictive_oceanographic_variables, pred)
+    model.fit(predictive_oceanographic_variables, target)
+    r_sq = model.score(predictive_oceanographic_variables, target)
     print(f"coefficient of determination: {r_sq}")
     print(f"slope: {model.coef_}")
     y_pred = model.predict(predictive_oceanographic_variables)
