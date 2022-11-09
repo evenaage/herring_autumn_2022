@@ -125,8 +125,9 @@ def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None):
     #plot catch data, if possible.
     try:  
         map.scatter( catch_data['longitude'], catch_data['latitude'],latlon=True, marker='^')
-    except:
+    except Exception as e:
         print("scatter didnt work")
+        print(repr(e))
         pass
     if show_depth: map.contour(lons, lats, depth,latlon=True)
 
@@ -343,6 +344,7 @@ if __name__ == '__main__':
 
     #in this loop, we stack both positive and assumed negative observations of herring in data, so we can train on them
     for day in range(1,2): #get data from some of january
+
         print('Day:', day)
         nc = Dataset(localize_nc_file('nor4km_data',2020, JANUARY,day ))
         Y = get_relevant_catch_data_csv('cleaned_datasets', 2020,JANUARY,day )
@@ -350,6 +352,7 @@ if __name__ == '__main__':
         predictive_oceanographic_variables = []
         target = []
         catches = []
+        
         data_added = {} #dict for remembering if we have already added negative track data for a vessel on a given day
         for index, catch in Y.iterrows():
             catches.append(catch)
@@ -364,6 +367,8 @@ if __name__ == '__main__':
             if not isinstance(vessel_data,pd.DataFrame): 
                 hour =catch['fangststart']
                 data = get_relevant_data_nc(nc, VARIABLES,hour)
+                ocean_variables = data[0]
+                print (ocean_variables.shape)
                 x,y = ll2xy( catch['longitude'], catch['latitude']) #get x and y coord from lat and long
                 predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
                 catches.append(catch['Rundvekt'])
@@ -412,14 +417,23 @@ if __name__ == '__main__':
             
     print(np.array(predictive_oceanographic_variables).shape)
     target = np.array(target)
+    variables_and_target = np.array[[predictive_oceanographic_variables, target]]
+    np.save('6_vars_and_target_january_2020', variables_and_target)
     #print(pred)
-    print_on_map(data[0,:,:], catch_data=catches)
-    plt.show()
+    #print_on_map(data[0,:,:], catch_data=catches)
+    #plt.show()
+    #catches = {'latitude:' [lat for lat in ]}
     model = LinearRegression()
     model.fit(predictive_oceanographic_variables, target)
     r_sq = model.score(predictive_oceanographic_variables, target)
     print(f"coefficient of determination: {r_sq}")
     print(f"slope: {model.coef_}")
-    y_pred = model.predict(predictive_oceanographic_variables)
-    print(f"predicted response:\n{y_pred}")
+    ocean_variables = data
+    reshaped = np.reshape(data, ( 620*941,len(VARIABLES)))
+    print(reshaped.shape)
+    y_pred = model.predict(reshaped)
+    y_pred = np.reshape(y_pred, (620,941))
+    print_on_map(y_pred, catches)
+    #print(f"predicted response:\n{y_pred}")
+    plt.show()
 
