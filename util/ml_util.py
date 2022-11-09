@@ -350,9 +350,13 @@ if __name__ == '__main__':
         predictive_oceanographic_variables = []
         target = []
         catches = []
+        data_added = {} #dict for remembering if we have already added negative track data for a vessel on a given day
         for index, catch in Y.iterrows():
             catches.append(catch)
             regnr = catch['Registreringsmerke']
+            catches_boat = Y[Y['Registreringsmerke'] == regnr]
+            catches_boat_day = catches_boat[catches_boat['day'] == day]
+
 
             vessel_data = get_vessel_track_data(vessel_dataframe_2020,regnr,JANUARY, day)
 
@@ -363,13 +367,25 @@ if __name__ == '__main__':
                 x,y = ll2xy( catch['longitude'], catch['latitude']) #get x and y coord from lat and long
                 predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
                 catches.append(catch['Rundvekt'])
-            
-            catch_start = catch['fangststart']
-            catch_stop = catch['fangstslutt']
-            catch_hours = range(catch_start, catch_stop+1)
 
-            catch_duration_hours = catch_stop - catch_start +1
-            catch_amount = catch['Rundvekt'] / catch_duration_hours #add this to make data a bit smaller
+            #check if we have added the vessel track data for this ship from this day already. If so, we have also added the catch data.
+            #Therefore, skip. This must ve dont after the code above, as if not we do not get catch data for multiple catches in days where there are no vessel data.
+            if (regnr, day) in  data_added.keys(): continue
+            data_added[(regnr, day)] = True
+            
+            catch_hours = []
+            catch_per_hour = {}
+            for idx, _catch in catches_boat_day.iterrows():
+                catch_start = _catch['fangststart']
+                catch_stop = _catch['fangstslutt']
+                catch_hours += range(catch_start, catch_stop+1)
+
+                catch_duration_hours = catch_stop - catch_start +1
+                catch_amount = catch['Rundvekt'] / catch_duration_hours #add this to make data a bit smaller
+                for hour in catch_hours:
+                    if hour in catch_per_hour.keys(): catch_per_hour[hour] += catch_amount
+                    else: catch_per_hour[hour] = catch_amount
+
 
             #add oceanic data for catch and non-catch hours. This is not independent data, maybe the day is over, maybe \
             # the boat is full, maybe they are going out to fish and not looking at echosounder. WIll include anyway,
@@ -379,13 +395,17 @@ if __name__ == '__main__':
                 #print(row)
                 hour = row['hour']
                 print(regnr, hour)
+
+
                 data = get_relevant_data_nc(nc, VARIABLES,hour) #get month/day/hour data
                 #print(type(row['latitude']), row['longitude'])
+                print("get_relevant_data ran")
                 x,y = ll2xy( row['longitude'], row['latitude']) #get x and y coord from lat and long
+                print("ll2xy ran")
                 predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
                 print('data added')
                 if hour in catch_hours:     #add catch. actual catch or 0
-                    target.append(catch_amount) 
+                    target.append(catch_per_hour[hour]) 
                 else:
                     target.append(0) 
         
