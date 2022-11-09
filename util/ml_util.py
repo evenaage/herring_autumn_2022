@@ -356,7 +356,13 @@ if __name__ == '__main__':
 
             vessel_data = get_vessel_track_data(vessel_dataframe_2020,regnr,JANUARY, day)
 
-            if not isinstance(vessel_data,pd.DataFrame): continue
+            #if we dont have vessel track data, just add catches            
+            if not isinstance(vessel_data,pd.DataFrame): 
+                hour =catch['fangststart']
+                data = get_relevant_data_nc(nc, VARIABLES,hour)
+                x,y = ll2xy( catch['longitude'], catch['latitude']) #get x and y coord from lat and long
+                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
+                catches.append(catch['Rundvekt'])
             
             catch_start = catch['fangststart']
             catch_stop = catch['fangstslutt']
@@ -377,7 +383,7 @@ if __name__ == '__main__':
                 #print(type(row['latitude']), row['longitude'])
                 x,y = ll2xy( row['longitude'], row['latitude']) #get x and y coord from lat and long
                 predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
-
+                print('data added')
                 if hour in catch_hours:     #add catch. actual catch or 0
                     target.append(catch_amount) 
                 else:
