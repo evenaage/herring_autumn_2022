@@ -251,7 +251,16 @@ def average_depth_data(data, depth_layer_index):
     return mean_data
 
 
-def find_data(data, index):
+def calculate_gradient(data, index1, index0):
+    gradients=[]
+    variables = data.shape[0]
+    for i in range(variables):
+        gradient = np.gradient(data[i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
+        if gradient[0].mask.any() == True or gradient[1].mask.any() == True: return None
+        gradients.append(gradient[0].data[1,1]**2 + gradient[0].data[1,1]**2)
+    return gradients
+
+def find_data(data, index, calculate_gradients=False):
     '''
     Function to find data from the "closest" grid cell in case data is missing.
 
@@ -263,33 +272,54 @@ def find_data(data, index):
         for i in range(1, step_length+1):
             index[1] -= 1 #walk down
             values = data[:,index[1], index[0]]
-            if FILL_VALUE not in values:
+            if calculate_gradients:
+                gradients = calculate_gradient(data, index[1], index[0])
+                if gradients == None : continue
+                values += gradients
+            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
                 return values
         for i in range(1, step_length+1):
             index[0] +=1 #walk right
             values = data[:,index[1], index[0]]
-            if FILL_VALUE not in values:
+            if calculate_gradients:
+                gradients = calculate_gradient(data, index[1], index[0])
+                if gradients == None : continue
+                values += gradients
+            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
                 return values
         for i in range(1, step_length+1):
             index[1] += 1 #walk up
             values = data[:,index[1], index[0]]
-            if FILL_VALUE not in values:
+            if calculate_gradients:
+                gradients = calculate_gradient(data, index[1], index[0])
+                if gradients == None : continue
+                values += gradients
+            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
                 return values
         for i in range(1, step_length+1):
             index[0] -= 1 #walk left
             values = data[:,index[1], index[0]]
-            if FILL_VALUE not in values:
+            if calculate_gradients:
+                gradients = calculate_gradient(data, index[1], index[0])
+                if gradients == None : continue
+                values += gradients
+            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None): 
                 return values
         index[0] -= 1
         index[1] +=1 
         return circle_around(data, index, 2*step_length) #double step length to circle around
 
-    
 
-    values = data[:,index[1], index[0]]
-    if FILL_VALUE in values: return circle_around(data, list((index[0] -1, index[1] +1)), step_length=2)
+    values = list(data[:,index[1], index[0]])
+
+    if calculate_gradients: 
+        gradients = calculate_gradient(data, index[1], index[0])
+        if gradients != None: values += gradients
+    if FILL_VALUE in values or ( calculate_gradients and gradients ==None): return circle_around(data, list((index[0] -1, index[1] +1)), step_length=2)
     else: return values
 
+
+#def get_plankton_data_nc()
 
 def get_vessel_track_data(df, reg, måned, dag):
     '''
@@ -332,7 +362,13 @@ def get_vessel_track_data(df, reg, måned, dag):
     return tracks
 
 
-    
+def save_data_and_pred(variables, target, name):
+    '''
+    Save data in file
+    '''
+    variables_and_target = np.array[[variables, target]]
+    np.save(name, variables_and_target)
+
 #def validate(predicted, )
 
 
@@ -367,10 +403,8 @@ if __name__ == '__main__':
             if not isinstance(vessel_data,pd.DataFrame): 
                 hour =catch['fangststart']
                 data = get_relevant_data_nc(nc, VARIABLES,hour)
-                ocean_variables = data[0]
-                print (ocean_variables.shape)
                 x,y = ll2xy( catch['longitude'], catch['latitude']) #get x and y coord from lat and long
-                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
+                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y), True)) #add the oceanic data from the sqaures the vessel was in at the time
                 catches.append(catch['Rundvekt'])
 
             #check if we have added the vessel track data for this ship from this day already. If so, we have also added the catch data.
@@ -407,6 +441,9 @@ if __name__ == '__main__':
                 print("get_relevant_data ran")
                 x,y = ll2xy( row['longitude'], row['latitude']) #get x and y coord from lat and long
                 print("ll2xy ran")
+                d = find_data(data[:,:,:], (x,y), True)
+                print(d)
+                print(find_data(data[:,:,:], (x,y)))
                 predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
                 print('data added')
                 if hour in catch_hours:     #add catch. actual catch or 0
@@ -417,12 +454,7 @@ if __name__ == '__main__':
             
     print(np.array(predictive_oceanographic_variables).shape)
     target = np.array(target)
-    variables_and_target = np.array[[predictive_oceanographic_variables, target]]
-    np.save('6_vars_and_target_january_2020', variables_and_target)
-    #print(pred)
-    #print_on_map(data[0,:,:], catch_data=catches)
-    #plt.show()
-    #catches = {'latitude:' [lat for lat in ]}
+
     model = LinearRegression()
     model.fit(predictive_oceanographic_variables, target)
     r_sq = model.score(predictive_oceanographic_variables, target)
