@@ -257,7 +257,7 @@ def calculate_gradient(data, index1, index0):
     for i in range(variables):
         gradient = np.gradient(data[i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
         if gradient[0].mask.any() == True or gradient[1].mask.any() == True: return None
-        gradients.append(gradient[0].data[1,1]**2 + gradient[0].data[1,1]**2)
+        gradients.append(np.sqrt(gradient[0].data[1,1]**2 + gradient[1].data[1,1]**2))
     return gradients
 
 def find_data(data, index, calculate_gradients=False):
@@ -266,45 +266,56 @@ def find_data(data, index, calculate_gradients=False):
 
     '''
     FILL_VALUE = -32768
-
     def circle_around(data, index, step_length): #circle around grid cell, with greater step length to hit new ells
-        #print(index)
+    
         for i in range(1, step_length+1):
             index[1] -= 1 #walk down
-            values = data[:,index[1], index[0]]
+            values = list(data[:,index[1], index[0]])
             if calculate_gradients:
                 gradients = calculate_gradient(data, index[1], index[0])
                 if gradients == None : continue
                 values += gradients
-            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
-                return values
+                if FILL_VALUE not in values:
+                    return values
+            else:
+                if FILL_VALUE not in values:
+                    return values
         for i in range(1, step_length+1):
             index[0] +=1 #walk right
-            values = data[:,index[1], index[0]]
+            values = list(data[:,index[1], index[0]])
             if calculate_gradients:
                 gradients = calculate_gradient(data, index[1], index[0])
                 if gradients == None : continue
                 values += gradients
-            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
-                return values
+            if FILL_VALUE not in values:
+                    return values
+            else:
+                if FILL_VALUE not in values:
+                    return values
         for i in range(1, step_length+1):
             index[1] += 1 #walk up
-            values = data[:,index[1], index[0]]
+            values = list(data[:,index[1], index[0]])
             if calculate_gradients:
                 gradients = calculate_gradient(data, index[1], index[0])
                 if gradients == None : continue
                 values += gradients
-            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None):
-                return values
+            if FILL_VALUE not in values:
+                    return values
+            else:
+                if FILL_VALUE not in values:
+                    return values
         for i in range(1, step_length+1):
             index[0] -= 1 #walk left
-            values = data[:,index[1], index[0]]
+            values = list(data[:,index[1], index[0]])
             if calculate_gradients:
                 gradients = calculate_gradient(data, index[1], index[0])
                 if gradients == None : continue
                 values += gradients
-            if FILL_VALUE not in values and (not calculate_gradients or gradients !=None): 
-                return values
+            if FILL_VALUE not in values:
+                    return values
+            else:
+                if FILL_VALUE not in values:
+                    return values
         index[0] -= 1
         index[1] +=1 
         return circle_around(data, index, 2*step_length) #double step length to circle around
@@ -315,7 +326,8 @@ def find_data(data, index, calculate_gradients=False):
     if calculate_gradients: 
         gradients = calculate_gradient(data, index[1], index[0])
         if gradients != None: values += gradients
-    if FILL_VALUE in values or ( calculate_gradients and gradients ==None): return circle_around(data, list((index[0] -1, index[1] +1)), step_length=2)
+    if FILL_VALUE in values or ( calculate_gradients and gradients ==None): 
+        return circle_around(data, list((index[0] -1, index[1] +1)), step_length=2)
     else: return values
 
 
@@ -388,6 +400,8 @@ if __name__ == '__main__':
         predictive_oceanographic_variables = []
         target = []
         catches = []
+
+
         
         data_added = {} #dict for remembering if we have already added negative track data for a vessel on a given day
         for index, catch in Y.iterrows():
@@ -438,32 +452,45 @@ if __name__ == '__main__':
 
                 data = get_relevant_data_nc(nc, VARIABLES,hour) #get month/day/hour data
                 #print(type(row['latitude']), row['longitude'])
-                print("get_relevant_data ran")
+                #print("get_relevant_data ran")
                 x,y = ll2xy( row['longitude'], row['latitude']) #get x and y coord from lat and long
-                print("ll2xy ran")
+                #print("ll2xy ran")
                 d = find_data(data[:,:,:], (x,y), True)
-                print(d)
-                print(find_data(data[:,:,:], (x,y)))
-                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y))) #add the oceanic data from the sqaures the vessel was in at the time
-                print('data added')
+                #print(d)
+                #print(find_data(data[:,:,:], (x,y)))
+                predictive_oceanographic_variables.append(find_data(data[:,:,:], (x,y), True)) #add the oceanic data from the sqaures the vessel was in at the time
+                #print('data added')
                 if hour in catch_hours:     #add catch. actual catch or 0
                     target.append(catch_per_hour[hour]) 
                 else:
                     target.append(0) 
         
             
-    print(np.array(predictive_oceanographic_variables).shape)
+    print(np.array(predictive_oceanographic_variables))
     target = np.array(target)
-
+    target = np.log(target+1)
     model = LinearRegression()
     model.fit(predictive_oceanographic_variables, target)
+
+    data = get_relevant_data_nc(nc, VARIABLES,0)
+    print(data.shape)
+    grads = []
+    for i in range(len(VARIABLES)):
+        grad = np.gradient(data[i,:,:])
+        grad = np.sqrt(np.square(grad[0].data) + np.square(grad[0].data))
+        grads.append(grad)
+    print(len(np.array(grads)))
+    data = np.append(data, grads, axis = 0)
+    print(data.shape)
+    reshaped = np.reshape(data, ( 620*941,2*len(VARIABLES)))
+    print(reshaped.shape)
+
     r_sq = model.score(predictive_oceanographic_variables, target)
     print(f"coefficient of determination: {r_sq}")
     print(f"slope: {model.coef_}")
-    ocean_variables = data
-    reshaped = np.reshape(data, ( 620*941,len(VARIABLES)))
-    print(reshaped.shape)
+    
     y_pred = model.predict(reshaped)
+    print(y_pred.shape)
     y_pred = np.reshape(y_pred, (620,941))
     print_on_map(y_pred, catches)
     #print(f"predicted response:\n{y_pred}")
