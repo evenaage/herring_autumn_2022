@@ -399,7 +399,7 @@ def get_catches_per_hour(catches_boat_day):
 if __name__ == '__main__': 
     VARIABLES = ['temperature','u_east', 'v_north', 'salinity', 'w_north', 'w_east']
     JANUARY =1
-    vessel_dataframe_2020 = pd.read_csv('vessel_data\VMS_2020.csv',delimiter=';', on_bad_lines='skip')
+    vessel_dataframe_2021 = pd.read_csv('vessel_data\VMS_2021.csv',delimiter=';', on_bad_lines='skip')
     YEAR = 2020
 
     predictive_oceanographic_variables = []
@@ -407,12 +407,15 @@ if __name__ == '__main__':
     catches = []
     plankton_data = []
     #in this loop, we stack both positive and assumed negative observations of herring in data, so we can train on them
-    for day in range(1,2): #get data from some of january
+    for day in range(1,29): #get data from some of january
 
         print('Day:', day)
-        nc = Dataset(localize_nc_file('nor4km_data',2020, JANUARY,day ))
-        Y = get_relevant_catch_data_csv('cleaned_datasets', 2020,JANUARY,day )
-        plankton = Dataset(localize_plankton_file('plankton_data', 2020, JANUARY,day))
+        try:
+            nc = Dataset(localize_nc_file('nor4km_data',2021, JANUARY,day ))
+            Y = get_relevant_catch_data_csv('cleaned_datasets', 2021,JANUARY,day )
+            plankton = Dataset(localize_plankton_file('plankton_data', 2021, JANUARY,day))
+        except:
+            print("Found no data for day", day, " skipping.")
 
         
         data_added = {} #dict for remembering if we have already added negative track data for a vessel on a given day
@@ -423,7 +426,7 @@ if __name__ == '__main__':
             catches_boat_day = catches_boat[catches_boat['day'] == day]
 
 
-            vessel_data = get_vessel_track_data(vessel_dataframe_2020,regnr,JANUARY, day)
+            vessel_data = get_vessel_track_data(vessel_dataframe_2021,regnr,JANUARY, day)
 
             #if we dont have vessel track data, just add catches            
             if not isinstance(vessel_data,pd.DataFrame): 
@@ -462,33 +465,37 @@ if __name__ == '__main__':
                 else:
                     target.append(0) 
 
-    print(np.array(plankton_data).shape)
+    #print(np.array(plankton_data).shape)
     
     predictive_oceanographic_variables = np.array(predictive_oceanographic_variables)
     predictive_oceanographic_variables = np.append(predictive_oceanographic_variables, plankton_data,axis=1)
     target = np.array(target)
-    print(predictive_oceanographic_variables)
+    #print(predictive_oceanographic_variables)
     print(predictive_oceanographic_variables.shape, target.shape)
     model = LinearRegression()
     model.fit(np.array(predictive_oceanographic_variables), target)
-    data = get_relevant_data_nc(nc, VARIABLES,0)
     r_sq = model.score(np.array(predictive_oceanographic_variables), target)
     print(f"coefficient of determination: {r_sq}")
     print(f"slope: {model.coef_}")
     
-    #np.save("2020_january_6_vars_and_gradients", predictive_oceanographic_variables)
-    #np.save("2020_january_target", target)
+    np.save("2021_january_6_vars_plus_plankton_and_gradients", predictive_oceanographic_variables)
+    np.save("2021_january_target", target)
     #np.save("2020_january_plankton_and_gradient", plankton_data)
-    
+    data = get_relevant_data_nc(nc, VARIABLES,0)
     grads = []
     for i in range(len(VARIABLES)):
         grad = np.gradient(data[i,:,:])
         grad = np.sqrt(np.square(grad[0].data) + np.square(grad[0].data))
         grads.append(grad)
-    print(len(np.array(grads)))
+    
+
     data = np.append(data, grads, axis = 0)
-    print(data.shape)
-    reshaped = np.reshape(data, ( 620*941,2*len(VARIABLES)))
+    plankton = Dataset(localize_plankton_file('plankton_data', 2021, JANUARY,28))
+    grad = np.gradient[plankton['Calanus_finmarchicus'][0,:,:]]
+    grad = np.sqrt(np.square(grad[0].data) + np.square(grad[0].data))
+    plankton = np.append(plankton, grad, axis=0)
+    data = np.append(data, plankton, axis=0)
+    reshaped = np.reshape(data, ( 620*941,2*len(VARIABLES) + 2))
     print(reshaped.shape)
 
     
