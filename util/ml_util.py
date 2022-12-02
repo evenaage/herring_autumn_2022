@@ -82,7 +82,7 @@ def xy2ll(x, y):
     return B, L
 
 
-def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None):
+def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None, ax = None):
     '''
     Prints a prediction on a map of the Norwegian sea in the form of a probability map. Optionally includes catch data, which are printed on top.
     Functions as a human interpretable model validation tool.
@@ -113,9 +113,10 @@ def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None):
     depth = np.load(os.path.join(path ,'depth'), allow_pickle=True)
 
     #figure stuff, also load world map with correct latitudes and longitudes
-    fig = plt.figure()
-    fig.set_size_inches(figsize[0] , figsize[1])
-    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution='i' )
+    if ax == None: 
+        fig = plt.figure()
+        fig.set_size_inches(figsize[0] , figsize[1])
+    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution='i', ax=ax )
     
     #prediction y is either a tensor or a numpy array, and needs to be a numpy array
     if type(y) == torch.tensor:
@@ -127,15 +128,16 @@ def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None):
 
     #
     probabilities = map.contourf(lons[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH],
-        np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH], mask= mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]),100, latlon=True, cmap =plt.cm.RdYlBu_r)
+        np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH], mask= mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]),100,\
+             latlon=True, cmap =plt.cm.RdYlBu_r)
     cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label="Probability 0-1")
 
     #plot catch data, if possible.
     try:  
         map.scatter( catch_data['longitude'], catch_data['latitude'],latlon=True, marker='^')
     except Exception as e:
-        print("scatter didnt work")
-        print(repr(e))
+        #print("scatter didnt work")
+        #print(repr(e))
         pass
     if show_depth: map.contour(lons, lats, depth,latlon=True)
 
@@ -575,14 +577,20 @@ def predict_per_grid_cell(model, ocean_data):
     return predictions
 
 
-def validate(model, prediction, truth):
+def validate(model, prediction, truth, cutoff):
     '''
     Validates a prediciton based on different metrics
     '''
+    names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','Temperature gradient', \
+     'Salinity gradient','w_east_gradient', 'u_east gradient','v_north_gradient','w_north_gradient','Calanus finmarchicus', \
+        'Calanus finmarchicus gradient', 'Catch']
+    fig, axs = plt.subplots(2,2)
+    fig.set_size_inches(15,15)
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     nc = Dataset(localize_nc_file('nor4km_data',2021, 1,20 ))
     data = get_relevant_data_nc(nc,VARIABLES,12)
-    sens = sum([(1 == prediction[i] )== truth[i] for i in range(len(truth))]) / np.count_nonzero(truth)
+    #prediction = [1 if p > cutoff else 0 for p in prediction]
+    sens = sum([(1 == prediction[i] )== truth[i] for i in range(len(truth))]) / np.count_nonzero(prediction)
     spec = sum([(0 == prediction[i] )== truth[i] for i in range(len(truth))])/ (len(truth) - np.count_nonzero(truth))
     acc = np.count_nonzero(prediction == truth) / len(truth)
     plankton = Dataset(localize_plankton_file('plankton_data', 2021, 1, 20))['Calanus_finmarchicus']
@@ -596,19 +604,32 @@ def validate(model, prediction, truth):
     #print(data.shape, np.array(grads).shape)
     data = np.append(data, grads, axis = 0)
     #print(data[0,:,:])
-    print_on_map(data[0,:,:])
-    data = np.reshape(data, (-1, 14))
+    #print_on_map(data[0,:,:])
+    data = np.reshape(data, (620*941, 14))
     print(data.shape)
-    try: pred = model(torch.tensor(data, dtype=torch.float32)).detach().numpy()
-    except: pred = model.predict(data)
+    #func = np.vectorize(model)
+    #pred = np.array([[model(torch.tensor(data[:,i,j], dtype=torch.float32)).detach().numpy() for i in range(data.shape[1])] for j in range(data.shape[2])])
+    #pred = np.array(list(map(model,torch.tensor(data, dtype=torch.float32))))
+    #try: pred = model(torch.tensor(data, dtype=torch.float32)).detach().numpy()
+    pred = model.predict(h2o.H2OFrame(data, column_names = names)).as_data_frame().to_numpy()[:,0]
     print(pred.shape)
-    print(pred)
-    #plt.hist(pred, bins=20)
-    pred = np.reshape(pred, (620, 941))
+    data = np.reshape(data, (14, 620, 941))
+    #pred = np.array([1 if p > cutoff else 0 for p in pred])
+    #print(pred[...,0].shape)
+    #print(np.transpose(pred[...,0]).shape)
+    #pred = np.transpose(pred[...,0])
+    plt.hist(pred, bins=20)
+    pred = np.reshape(pred, ( 620,941))
     print(pred.shape)
     print(sens, spec, acc)
     catch_data = get_relevant_catch_data_csv('cleaned_datasets', 2021,1,20 )
-    print_on_map(pred, catch_data)
+    print_on_map(pred, catch_data, ax=axs[0,0])
+    axs[0,0].set_title('Herring prediction')
+    print_on_map(data[0,...], ax = axs[1,0])
+    axs[1,0].set_title('Temeperature')
+    print_on_map(data[-2,...], ax = axs[0,1])
+    axs[0,1].set_title('Plankton distribution')
+    #print_on_map(data[3,...],)
     plt.show()
 
 
