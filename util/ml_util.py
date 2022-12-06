@@ -128,15 +128,17 @@ ax = None, title="Herring distribution probability", cb_label = "Probability 0-1
         pred_numpy = y
 
     if normalize:
+        max = np.max(pred_numpy)
+        print(max)
         pred_normalized = pred_numpy/np.max(pred_numpy)
     else:
         pred_normalized = pred_numpy
 
     #
-    #probabilities = map.contourf(lons, lats, pred_normalized, latlon=True)
+    #probabilities = map.contourf(lons[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH],100, latlon=True, cmap =plt.cm.RdYlBu_r)
     probabilities = map.contourf(lons[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH],
         np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], mask[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH]),100,\
-            latlon=True, cmap =plt.cm.RdYlBu_r)
+           latlon=True, cmap =plt.cm.RdYlBu_r)
     cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label=cb_label)
 
     #plot catch data, if possible.
@@ -660,6 +662,7 @@ def validate(model, prediction, truth, cutoff):
                 predictions.append(val)
             except:
                 #print(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy())
+                data = np.reshape(data, (620*941, 14))
                 pred[yc, xc] = np.mean(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy()[:,0])
 
     #[[pred[i,j] = model(torch.tensor(data[:,i,j], dtype=torch.float32)).detach().numpy() for i in range(XC_LOW,XC_HIGH)] for j in range(YC_LOW, YC_HIGH)]
