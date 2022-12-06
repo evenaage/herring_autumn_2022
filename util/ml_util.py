@@ -8,15 +8,16 @@ import torch
 from netCDF4 import Dataset
 import pandas as pd
 from sklearn.linear_model import LinearRegression
+import sklearn
 import h2o
 from h2o.automl import H2OAutoML
 import traceback
 
 #these grid cell coordinates denote the borders of the norwegian economic zone
-XC_LOW = 41
-YC_LOW = 157
-XC_HIGH = 671
-YC_HIGH = 373 #273 for norwegian economic zone?
+XC_LOW = 41 #41
+YC_LOW = 157 # 157
+XC_HIGH = 671# 671
+YC_HIGH = 373 #373 #273 for norwegian economic zone?
 
 def ll2xy(lat, lon):
     '''
@@ -82,7 +83,8 @@ def xy2ll(x, y):
     return B, L
 
 
-def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None, ax = None):
+def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None, 
+ax = None, title="Herring distribution probability", cb_label = "Probability 0-1", normalize=True):
     '''
     Prints a prediction on a map of the Norwegian sea in the form of a probability map. Optionally includes catch data, which are printed on top.
     Functions as a human interpretable model validation tool.
@@ -112,11 +114,12 @@ def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None, ax 
     lons = np.load(os.path.join(path ,'lons'), allow_pickle=True)
     depth = np.load(os.path.join(path ,'depth'), allow_pickle=True)
 
+
     #figure stuff, also load world map with correct latitudes and longitudes
     if ax == None: 
         fig = plt.figure()
         fig.set_size_inches(figsize[0] , figsize[1])
-    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution='i', ax=ax )
+    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution='i', ax=ax ) #37, 75
     
     #prediction y is either a tensor or a numpy array, and needs to be a numpy array
     if type(y) == torch.tensor:
@@ -124,13 +127,17 @@ def print_on_map(y,  catch_data = None,  figsize = (10,10), show_depth=None, ax 
     else:
         pred_numpy = y
 
-    pred_normalized = pred_numpy/pred_numpy.max()
+    if normalize:
+        pred_normalized = pred_numpy/np.max(pred_numpy)
+    else:
+        pred_normalized = pred_numpy
 
     #
-    probabilities = map.contourf(lons[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH],
-        np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH], mask= mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]),100,\
-             latlon=True, cmap =plt.cm.RdYlBu_r)
-    cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label="Probability 0-1")
+    #probabilities = map.contourf(lons, lats, pred_normalized, latlon=True)
+    probabilities = map.contourf(lons[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH],
+        np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], mask[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH]),100,\
+            latlon=True, cmap =plt.cm.RdYlBu_r)
+    cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label=cb_label)
 
     #plot catch data, if possible.
     try:  
@@ -225,8 +232,8 @@ def get_relevant_data_nc(dataset, variables, hour = None, take_avg_of_depth_laye
                 d = np.expand_dims(d, 0)
                 #print(d.shape)
                 data[i,...] = d #this data des not have depth layers, e.g. wind
-        if take_avg_of_depth_layers :data = average_depth_data(data, 2)
-        return data[:,0,:,:] #remove depth data, that layer is only 1 var and therefore superflous
+        if take_avg_of_depth_layers :data = average_depth_data(data, 2)[:,0,:,:]
+        return data 
     except Exception:
         traceback.print_exc()
         print('Dataset not found. Check path and/or date')
@@ -277,10 +284,12 @@ def average_depth_data(data, depth_layer_index):
 def calculate_gradient(data, index1, index0):
     gradients=[]
     variables = data.shape[0]
-
+    #print(variables)
     for i in range(variables):
         gradient = np.gradient(data[...,i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
+        #print('data and gradients')
         #print(data[...,i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
+        #print(gradient)
         if gradient[0].mask.any() == True or gradient[1].mask.any() == True: return None
         gradients.append(np.sqrt(gradient[0].data[1,1]**2 + gradient[1].data[1,1]**2))
     return gradients
@@ -435,7 +444,7 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
     catches = []
     plankton_data = []
     #in this loop, we stack both positive and assumed negative observations of herring in data, so we can train on them
-    for day in range(1,32): #get data from days
+    for day in range(0,32): #get data from days
 
         print('-------------------------- Day:', day, '------------------------------------------------')
         try:
@@ -472,11 +481,12 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                     d = find_data(data[:,:,:], (x,y), True)
                 else:
                     try:
-                        d_plankton = plankton['Calanus_finmarchicus'][:,y,x] 
-                        d = data[:,y,x]
+                        d_plankton = list(plankton['Calanus_finmarchicus'][:,y,x] )
+                        d = list(data[:,y,x])
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
                         d += calculate_gradient(data[:,:,:],y,x)
-                    except:
+                    except Exception as e:
+                        #print(traceback(e))
                         print('bad data, skipping')
                         continue
                 plankton_data.append(d_plankton)
@@ -491,9 +501,8 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
             
             catch_hours, catch_per_hour = get_catches_per_hour(catches_boat_day)
             last_catch = catch_hours[-1] #remove all hours after last catch, assume they are heading home
-            #print(vessel_data)
-            #start = vessel_data.iloc[1]['hour']
-            #print(start)
+       
+            #print('last_catch', last_catch)
 
             #add oceanic data for catch and non-catch hours. This is not independent data, maybe the day is over, maybe \
             # the boat is full, maybe they are going out to fish and not looking at echosounder. WIll include anyway,
@@ -506,6 +515,9 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
             print(slice(first_hour,last_hour))'''
             for index, row in vessel_data.iterrows():
                 hour = row['hour']
+                if hour > last_catch: 
+                    print("our of last catch reached, ignore data")
+                    break
                 if hour in added_this_hour.keys(): continue # or hour > last_catch: continue
                 added_this_hour[hour] = True
                 print(regnr, hour)
@@ -521,16 +533,20 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                     d = find_data(data[:,:,:], (x,y), True)
                 else:
                     try:
-                        d_plankton = plankton['Calanus_finmarchicus'][:,y,x] 
-                        d = data[:,y,x]
-                        #print(data.shape)
+                        d_plankton = list(plankton['Calanus_finmarchicus'][:,y,x] )
+                        d = list(data[:,y,x])
+                        print(d)
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
                         grad = calculate_gradient(data,y,x)
+                        #print('gradients: ', grad, d_plankton)
                         #print(grad, calculate_gradient(plankton['Calanus_finmarchicus'], y, x))
                         d += calculate_gradient(data[:,:,:],y,x)
-                    except:
-                        print('Bad data, skipping')
+                        
+                    except Exception as e:
+                        #traceback.print_exception(e)
+                        print('bad data, skipping')
                         continue
+                print('data: ', d, 'plankton data:' , d_plankton)
                 plankton_data.append(d_plankton)
                 predictive_oceanographic_variables.append(d) #add the oceanic data from the sqaures the vessel was in at the time
                 #print(d, d_plankton)
@@ -554,15 +570,15 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
     np.save(filename_plankton, plankton_data)
     np.save(filename_target, target)
 
-def load_and_combine_data(year, month):
+def load_and_combine_data(year, month,folder,  skip_bad_cells=False):
     if month == 'jan':
-        data  = np.load('6_vars_1_depth_layer_january_' + str(year)+'.npy', allow_pickle=True)
-        plankton = np.load('plankton_'  +str(year)+'_january.npy', allow_pickle=True )
-        target = np.load('target_jan' + str(year)+ '.npy', allow_pickle=True)
+        data  = np.load(os.path.join(folder, 'january_' + str(year)+'_ocean_data.npy'), allow_pickle=True)
+        plankton = np.load(os.path.join(folder,'plankton' +'_january_'+str(year) + '.npy'), allow_pickle=True )
+        target = np.load(os.path.join(folder,'target_january_' + str(year)+ '.npy'), allow_pickle=True)
     elif month == 'dec':
-        data  = np.load('6_vars_1_depth_layer_december_' + str(year)+'.npy', allow_pickle=True)
-        plankton = np.load('plankton_'  +str(year)+'_december.npy', allow_pickle=True )
-        target = np.load('target_dec' + str(year)+ '.npy', allow_pickle=True)
+        data  = np.load(os.path.join(folder,'december_'+  str(year)+'_ocean_data.npy'), allow_pickle=True)
+        plankton = np.load(os.path.join(folder,'plankton_'   + 'december_'  +str(year)+ '.npy'), allow_pickle=True )
+        target = np.load(os.path.join(folder,'target_december_' +  str(year)+ '.npy'), allow_pickle=True)
     data = np.append(data, plankton, axis=1)
     target = np.array([target[i].iloc[0] if isinstance(target[i], pd.Series) else target[i] for i in range(len(target))])
 
@@ -584,15 +600,38 @@ def validate(model, prediction, truth, cutoff):
     names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','Temperature gradient', \
      'Salinity gradient','w_east_gradient', 'u_east gradient','v_north_gradient','w_north_gradient','Calanus finmarchicus', \
         'Calanus finmarchicus gradient', 'Catch']
-    fig, axs = plt.subplots(2,2)
-    fig.set_size_inches(15,15)
+    #fig, axs = plt.subplots(2,2)
+    #fig.set_size_inches(15,15)
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     nc = Dataset(localize_nc_file('nor4km_data',2021, 1,20 ))
     data = get_relevant_data_nc(nc,VARIABLES,12)
-    #prediction = [1 if p > cutoff else 0 for p in prediction]
-    sens = sum([(1 == prediction[i] )== truth[i] for i in range(len(truth))]) / np.count_nonzero(prediction)
-    spec = sum([(0 == prediction[i] )== truth[i] for i in range(len(truth))])/ (len(truth) - np.count_nonzero(truth))
+    mask = data[0,...].mask
+    prediction = [1 if p > cutoff else 0 for p in prediction]
+    #print(prediction.shape, truth.shape)
+    acc = (prediction == truth)
+    #print(acc.shape)
+    sens = 0
+    spec = 0
+    pos = 0
+    neg = 0
+    for i in range(len(acc)):
+        if acc[i] == True:
+            if prediction[i] == 1:
+                pos += 1
+                sens += 1
+            else:
+                spec += 1
+                neg += 1
+        else:
+            if prediction[i] == 1:
+                pos += 1
+            else:
+                neg += 1
+
+    #spec = sum([0 if (acc[i] == False and prediction[i]) == 0 else 0 for i in range(len(truth))])/ (len(truth) - np.count_nonzero(truth))
     acc = np.count_nonzero(prediction == truth) / len(truth)
+    sens = sens/pos
+    spec = spec/neg
     plankton = Dataset(localize_plankton_file('plankton_data', 2021, 1, 20))['Calanus_finmarchicus']
     #print(data.shape, plankton.shape)
     data = np.append(data, plankton, axis=0)
@@ -605,31 +644,52 @@ def validate(model, prediction, truth, cutoff):
     data = np.append(data, grads, axis = 0)
     #print(data[0,:,:])
     #print_on_map(data[0,:,:])
-    data = np.reshape(data, (620*941, 14))
+    print(data.shape)
+    #data = np.reshape(data, (620*941, 14))
     print(data.shape)
     #func = np.vectorize(model)
-    #pred = np.array([[model(torch.tensor(data[:,i,j], dtype=torch.float32)).detach().numpy() for i in range(data.shape[1])] for j in range(data.shape[2])])
+    print(data[:,...].shape, data.shape)
+    pred = np.zeros((620, 941))
+    predictions  =[]
+    for xc in range(XC_LOW, XC_HIGH):
+        if xc % 100 ==0: print(xc)
+        for yc in range(YC_LOW, YC_HIGH):
+            try:
+                val =model(torch.tensor(data[:,yc,xc], dtype=torch.float32)).detach().numpy() 
+                pred[yc, xc] = val
+                predictions.append(val)
+            except:
+                #print(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy())
+                pred[yc, xc] = np.mean(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy()[:,0])
+
+    #[[pred[i,j] = model(torch.tensor(data[:,i,j], dtype=torch.float32)).detach().numpy() for i in range(XC_LOW,XC_HIGH)] for j in range(YC_LOW, YC_HIGH)]
+    #print(pred)
+    #print(pred[pred > 0])
     #pred = np.array(list(map(model,torch.tensor(data, dtype=torch.float32))))
     #try: pred = model(torch.tensor(data, dtype=torch.float32)).detach().numpy()
-    pred = model.predict(h2o.H2OFrame(data, column_names = names)).as_data_frame().to_numpy()[:,0]
-    print(pred.shape)
+    #except: pred = model.predict(h2o.H2OFrame(data, column_names = names)).as_data_frame().to_numpy()[:,0]
+   
     data = np.reshape(data, (14, 620, 941))
-    #pred = np.array([1 if p > cutoff else 0 for p in pred])
+    plt.hist(np.array(predictions),bins=20)
+    plt.show()
     #print(pred[...,0].shape)
     #print(np.transpose(pred[...,0]).shape)
     #pred = np.transpose(pred[...,0])
-    plt.hist(pred, bins=20)
-    pred = np.reshape(pred, ( 620,941))
+    #pred = np.reshape(pred, ( 1,620,941))
+    print("Non zero predictions in norwegian economic zone:" , np.count_nonzero(pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]))
     print(pred.shape)
-    print(sens, spec, acc)
+    print('Sensitivity: ', sens, ' Specificity: ', spec,' Accuracy: ', acc)
     catch_data = get_relevant_catch_data_csv('cleaned_datasets', 2021,1,20 )
-    print_on_map(pred, catch_data, ax=axs[0,0])
+    print_on_map(np.ma.masked_array(pred,mask) , catch_data,normalize=False)
+    '''
     axs[0,0].set_title('Herring prediction')
-    print_on_map(data[0,...], ax = axs[1,0])
-    axs[1,0].set_title('Temeperature')
-    print_on_map(data[-2,...], ax = axs[0,1])
+    print_on_map(data[0,...], ax = axs[1,0], cb_label = 'Temperature low to high', normalize=False)
+    axs[1,0].set_title('Temperature')
+    print_on_map(data[-2,...], ax = axs[0,1], cb_label = "Plankton density low to high",normalize=False)
     axs[0,1].set_title('Plankton distribution')
-    #print_on_map(data[3,...],)
+    axs[1,1].set_title('Prediction histogram')
+    #,ax = axs[1,1])
+    '''
     plt.show()
 
 
@@ -673,14 +733,14 @@ if __name__ == '__main__':
     #print_on_map(temperature, catch_data=get_relevant_catch_data_csv('cleaned_datasets', 2021, 1, 1 ))
     #print(f"predicted response:\n{y_pred}")
     #plt.show()
+    folder = 'dataset_2_skip_bad_cells'
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     #read_and_store_dataset(2021, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2021', 'target_jan_2021' )
     #read_and_store_dataset(2020, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2020', 'target_jan_2020' )
-    
-    for year in range(2021, 2022):
-        read_and_store_dataset(year, 1, VARIABLES, '6_vars_1_depth_layer_january_skipping_bad_cells_' + str(year), \
-        'plankton_'+str(year)+'_january_skipping_bad_cells' ,'target_jan_skipping_bad_cells_' + str(year),use_closest_grid_cell=False)
-    for year in range(2021, 2022):
-        read_and_store_dataset(year, 12,VARIABLES, '6_vars__1_depth_layer_december_skipping_bad_cells_' + str(year) , \
-            'plankton_'+str(year)+'_december_skipping_bad_cells_', 'target_dec_skipping_bad_cells_' + str(year),use_closest_grid_cell=False)
+    for year in range(2019, 2022):
+        read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
+        os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False)
+    for year in range(2019, 2022):
+        read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'december_' + str(year)+'_ocean_data'), \
+            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False)
     
