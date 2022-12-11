@@ -119,7 +119,7 @@ ax = None, title="Herring distribution probability", cb_label = "Probability 0-1
     if ax == None: 
         fig = plt.figure()
         fig.set_size_inches(figsize[0] , figsize[1])
-    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution='i', ax=ax ) #37, 75
+    map = Basemap(projection='merc', llcrnrlon=-5.,llcrnrlat=56.,urcrnrlon=37.,urcrnrlat=75.,resolution=None, ax=ax ) #37, 75
     
     #prediction y is either a tensor or a numpy array, and needs to be a numpy array
     if type(y) == torch.tensor:
@@ -128,22 +128,26 @@ ax = None, title="Herring distribution probability", cb_label = "Probability 0-1
         pred_numpy = y
 
     if normalize:
-        max = np.max(pred_numpy)
-        print(max)
-        pred_normalized = pred_numpy/np.max(pred_numpy)
+        print(np.min(pred_numpy),np.max(pred_numpy))
+        pred_numpy -= np.min(pred_numpy)
+        
+        pred_normalized = pred_numpy/(np.max(pred_numpy) if np.max(pred_numpy) != np.inf else 1)
     else:
         pred_normalized = pred_numpy
-
-    #
-    #probabilities = map.contourf(lons[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH],100, latlon=True, cmap =plt.cm.RdYlBu_r)
+    #print(type(pred_normalized), type(pred_normalized[100,300]))
+    #map.drawlsmask()
+    #probabilities = map.contourf(lons, lats, pred_normalized,100, latlon=True, cmap =plt.cm.RdYlBu_r)
     probabilities = map.contourf(lons[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], lats[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH],
-        np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], mask[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH]),100,\
-           latlon=True, cmap =plt.cm.RdYlBu_r)
-    cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label=cb_label)
+       np.ma.masked_array(pred_normalized[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH], mask[YC_LOW:YC_HIGH, XC_LOW:XC_HIGH]),100,\
+        latlon=True, cmap =plt.cm.RdYlBu_r)
 
+    map.etopo()
+
+    cb = map.colorbar(probabilities,"bottom", size="5%", pad="2%", label=cb_label)
+    
     #plot catch data, if possible.
     try:  
-        map.scatter( catch_data['longitude'], catch_data['latitude'],latlon=True, marker='^')
+        map.scatter( catch_data['longitude'], catch_data['latitude'],latlon=True, marker='.',c='limegreen',s=8)
     except Exception as e:
         #print("scatter didnt work")
         #print(repr(e))
@@ -151,7 +155,7 @@ ax = None, title="Herring distribution probability", cb_label = "Probability 0-1
     if show_depth: map.contour(lons, lats, depth,latlon=True)
 
     #draw world map
-    map.etopo()
+
 
 def get_relevant_catch_data_csv(path_to_dataset, year, month, day = None, hour = None):
     '''
@@ -539,16 +543,16 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                         d = list(data[:,y,x])
                         print(d)
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
-                        grad = calculate_gradient(data,y,x)
+                        #grad = calculate_gradient(data,y,x)
                         #print('gradients: ', grad, d_plankton)
                         #print(grad, calculate_gradient(plankton['Calanus_finmarchicus'], y, x))
                         d += calculate_gradient(data[:,:,:],y,x)
                         
                     except Exception as e:
                         #traceback.print_exception(e)
-                        print('bad data, skipping')
+                        #print('bad data, skipping')
                         continue
-                print('data: ', d, 'plankton data:' , d_plankton)
+                #print('data: ', d, 'plankton data:' , d_plankton)
                 plankton_data.append(d_plankton)
                 predictive_oceanographic_variables.append(d) #add the oceanic data from the sqaures the vessel was in at the time
                 #print(d, d_plankton)
@@ -572,7 +576,7 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
     np.save(filename_plankton, plankton_data)
     np.save(filename_target, target)
 
-def load_and_combine_data(year, month,folder,  skip_bad_cells=False):
+def load_and_combine_data(year, month,folder):
     if month == 'jan':
         data  = np.load(os.path.join(folder, 'january_' + str(year)+'_ocean_data.npy'), allow_pickle=True)
         plankton = np.load(os.path.join(folder,'plankton' +'_january_'+str(year) + '.npy'), allow_pickle=True )
@@ -595,6 +599,15 @@ def predict_per_grid_cell(model, ocean_data):
     return predictions
 
 
+def get_validation_metrics(prediction, truth, cutoff):
+    prediction = np.array([True if prediction[i] > cutoff else False for i in range(len(prediction))])
+    truth = np.array([True if truth[i] == 1 else False for i in range(len(truth))])
+    accuracy = np.count_nonzero(prediction ==truth)/len(truth)
+    sensitivity = np.count_nonzero(prediction[truth])/np.count_nonzero(truth)
+    specificity = np.count_nonzero(np.invert(prediction[np.invert(truth)]))/np.count_nonzero(np.invert(truth))
+    return sensitivity, specificity, accuracy
+
+
 def validate(model, prediction, truth, cutoff):
     '''
     Validates a prediciton based on different metrics
@@ -602,97 +615,59 @@ def validate(model, prediction, truth, cutoff):
     names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','Temperature gradient', \
      'Salinity gradient','w_east_gradient', 'u_east gradient','v_north_gradient','w_north_gradient','Calanus finmarchicus', \
         'Calanus finmarchicus gradient', 'Catch']
-    #fig, axs = plt.subplots(2,2)
-    #fig.set_size_inches(15,15)
+    fig, axs = plt.subplots(1,2)
+    fig.set_size_inches(10,10)
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     nc = Dataset(localize_nc_file('nor4km_data',2021, 1,20 ))
     data = get_relevant_data_nc(nc,VARIABLES,12)
-    mask = data[0,...].mask
-    prediction = [1 if p > cutoff else 0 for p in prediction]
-    #print(prediction.shape, truth.shape)
-    acc = (prediction == truth)
-    #print(acc.shape)
-    sens = 0
-    spec = 0
-    pos = 0
-    neg = 0
-    for i in range(len(acc)):
-        if acc[i] == True:
-            if prediction[i] == 1:
-                pos += 1
-                sens += 1
-            else:
-                spec += 1
-                neg += 1
-        else:
-            if prediction[i] == 1:
-                pos += 1
-            else:
-                neg += 1
+    mask = np.load(os.path.join('util' ,'sinmod_land_sea_mask'), allow_pickle=True)
+    
+    sens, spec, acc = get_validation_metrics(prediction, truth, cutoff)
 
-    #spec = sum([0 if (acc[i] == False and prediction[i]) == 0 else 0 for i in range(len(truth))])/ (len(truth) - np.count_nonzero(truth))
-    acc = np.count_nonzero(prediction == truth) / len(truth)
-    sens = sens/pos
-    spec = spec/neg
     plankton = Dataset(localize_plankton_file('plankton_data', 2021, 1, 20))['Calanus_finmarchicus']
-    #print(data.shape, plankton.shape)
     data = np.append(data, plankton, axis=0)
     grads = []
     for i in range(len(VARIABLES) +1):
         grad = np.gradient(data[i,:,:])
         grad = np.sqrt(np.square(grad[0].data) + np.square(grad[0].data))
         grads.append(grad)
-    #print(data.shape, np.array(grads).shape)
-    data = np.append(data, grads, axis = 0)
-    #print(data[0,:,:])
-    #print_on_map(data[0,:,:])
-    print(data.shape)
-    #data = np.reshape(data, (620*941, 14))
-    print(data.shape)
-    #func = np.vectorize(model)
-    print(data[:,...].shape, data.shape)
-    pred = np.zeros((620, 941))
-    predictions  =[]
-    for xc in range(XC_LOW, XC_HIGH):
-        if xc % 100 ==0: print(xc)
-        for yc in range(YC_LOW, YC_HIGH):
-            try:
-                val =model(torch.tensor(data[:,yc,xc], dtype=torch.float32)).detach().numpy() 
-                pred[yc, xc] = val
-                predictions.append(val)
-            except:
-                #print(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy())
-                data = np.reshape(data, (620*941, 14))
-                pred[yc, xc] = np.mean(model.predict(h2o.H2OFrame(data[:,yc,xc], column_names = names)).as_data_frame().to_numpy()[:,0])
 
-    #[[pred[i,j] = model(torch.tensor(data[:,i,j], dtype=torch.float32)).detach().numpy() for i in range(XC_LOW,XC_HIGH)] for j in range(YC_LOW, YC_HIGH)]
-    #print(pred)
-    #print(pred[pred > 0])
-    #pred = np.array(list(map(model,torch.tensor(data, dtype=torch.float32))))
-    #try: pred = model(torch.tensor(data, dtype=torch.float32)).detach().numpy()
-    #except: pred = model.predict(h2o.H2OFrame(data, column_names = names)).as_data_frame().to_numpy()[:,0]
-   
+    data = np.append(data, grads, axis = 0)
+    pred = np.zeros((620,941))
+    try:
+        pred = np.array( [model(torch.tensor(data[:,i,:].T,dtype=torch.float32)).detach().numpy() for i in range(620)])
+    except:
+        try:
+            pred = np.array( [model.predict(data[:,i,:].T) for i in range(620)])
+            #print("yes")
+        except:
+            pred = np.array( [model.predict(h2o.H2OFrame(data[:,i,:].T, column_names = names)).as_data_frame().to_numpy()[:,:] for i in range(620)])
+    print(model)
+    if len(pred.shape) > 2:pred = pred[...,0]
+    #pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH] = _pred
+    #pred = _pred
+
     data = np.reshape(data, (14, 620, 941))
-    plt.hist(np.array(predictions),bins=20)
-    plt.show()
-    #print(pred[...,0].shape)
-    #print(np.transpose(pred[...,0]).shape)
-    #pred = np.transpose(pred[...,0])
-    #pred = np.reshape(pred, ( 1,620,941))
-    print("Non zero predictions in norwegian economic zone:" , np.count_nonzero(pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]))
-    print(pred.shape)
+
+    print("Non zero predictions in norwegian economic zone:" , np.count_nonzero(np.ma.masked_array(pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH],mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH])))
     print('Sensitivity: ', sens, ' Specificity: ', spec,' Accuracy: ', acc)
+
     catch_data = get_relevant_catch_data_csv('cleaned_datasets', 2021,1,20 )
-    print_on_map(np.ma.masked_array(pred,mask) , catch_data,normalize=False)
-    '''
-    axs[0,0].set_title('Herring prediction')
-    print_on_map(data[0,...], ax = axs[1,0], cb_label = 'Temperature low to high', normalize=False)
-    axs[1,0].set_title('Temperature')
-    print_on_map(data[-2,...], ax = axs[0,1], cb_label = "Plankton density low to high",normalize=False)
-    axs[0,1].set_title('Plankton distribution')
-    axs[1,1].set_title('Prediction histogram')
+    x_y = [ll2xy(r['latitude'], r['longitude']) for _,r in catch_data.iterrows()]
+    predictions = [pred[x_y[i][0], x_y[i][1]] for i in range(len(x_y))]
+
+    print("Amount of correct predictions on given day: ", np.count_nonzero(np.array(predictions))/len(predictions))
+    print_on_map(pred , catch_data,normalize=False, ax=axs[0])
+    
+    axs[0].set_title('Herring prediction')
+    #print_on_map(data[0,...], ax = axs[1,0], cb_label = 'Temperature low to high', normalize=False)
+    #axs[1,0].set_title('Temperature')
+    #print_on_map(data[-2,...], ax = axs[0,1], cb_label = "Plankton density low to high",normalize=False)
+    #axs[0,1].set_title('Plankton distribution')
+    axs[1].set_title('Prediction histogram')
+    axs[1].hist(pred)
     #,ax = axs[1,1])
-    '''
+    
     plt.show()
 
 
@@ -736,14 +711,14 @@ if __name__ == '__main__':
     #print_on_map(temperature, catch_data=get_relevant_catch_data_csv('cleaned_datasets', 2021, 1, 1 ))
     #print(f"predicted response:\n{y_pred}")
     #plt.show()
-    folder = 'dataset_2_skip_bad_cells'
+    folder = 'dataset_1_closest_grid_cells'
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     #read_and_store_dataset(2021, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2021', 'target_jan_2021' )
     #read_and_store_dataset(2020, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2020', 'target_jan_2020' )
-    for year in range(2019, 2022):
-        read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
-        os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False)
+    #for year in range(2019, 2022):
+     #   read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
+      #  os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_january_' + str(year)),use_closest_grid_cell=False,replace=True)
     for year in range(2019, 2022):
         read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'december_' + str(year)+'_ocean_data'), \
-            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False)
+            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=True,replace=True)
     
