@@ -18,6 +18,7 @@ XC_LOW = 41 #41
 YC_LOW = 157 # 157
 XC_HIGH = 671# 671
 YC_HIGH = 373 #373 #273 for norwegian economic zone?
+FILL_VALUE = -32768 	
 
 def ll2xy(lat, lon):
     '''
@@ -229,16 +230,37 @@ def get_relevant_data_nc(dataset, variables, hour = None, take_avg_of_depth_laye
         array_shape = (len(variables),1 if isinstance(hour, int) else len(hour), DEPTH_LAYERS,620, 941 )
         data =np.zeros(array_shape)
         for i, var in enumerate(variables):
+            #print(var, type(nc[var][:]))
+            #print(nc[var][:].fill_value)
+            #np.ma.set_fill_value(nc[var][:],0)
+            #print(nc[var][:].fill_value)
             try:
-                data[i,...] = nc[var][hour, 0:DEPTH_LAYERS,:,:]
+                data[i,...] = np.ma.masked_array(nc[var][hour, 0:DEPTH_LAYERS,:,:], mask = nc[var][hour, 0:DEPTH_LAYERS,:,:] == FILL_VALUE)
+                #print(np.count_nonzero(data[i,...] == FILL_VALUE))
                 #print(nc[var][hour, 0:DEPTH_LAYERS,:,:].shape)
+                #data[i,...] = np.ma.masked_where(data[i,...] == FILL_VALUE,data[i,...])
+                #print(type(data[i,...]), np.count_nonzero(data[i,...] == FILL_VALUE))
+                #plt.hist(data[0,0,0,...])
             except:
-                d = nc[var][hour, :,:]
-                #print(d.shape)
-                d = np.expand_dims(d, 0)
-                #print(d.shape)
-                data[i,...] = d #this data des not have depth layers, e.g. wind
+                try:
+                    d = nc[var][hour, :,:]
+                    #print(d.shape)
+                    d = np.expand_dims(d, 0)
+                    #print(d.shape)
+                    data[i,...] = d #this data des not have depth layers, e.g. wind
+                except:
+                    d = nc[var][...] #depth data
+                    d = np.expand_dims(d, 0)
+                    d = np.expand_dims(d, 0) #add two empty layers to fit w other data
+                    #print(d.shape)
+                    #print(d[0,0,...].shape)
+                    #d = np.ma.masked_values(d, 9.96921e+36)
+                    data[i,...] = d
         if take_avg_of_depth_layers :data = average_depth_data(data, 2)[:,0,:,:]
+        data = np.ma.masked_values(data, FILL_VALUE, copy=True)
+        data = np.ma.masked_values(data, 9.96921e+36, copy=True)
+        #print(np.count_nonzero(data.mask))
+        print(np.count_nonzero(data[-1,...]))
         return data 
     except Exception:
         traceback.print_exc()
@@ -291,13 +313,14 @@ def calculate_gradient(data, index1, index0):
     gradients=[]
     variables = data.shape[0]
     #print(variables)
+    masked = np.ma.masked_values(data, FILL_VALUE)
     for i in range(variables):
-        gradient = np.gradient(data[...,i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
+        gradient = np.gradient(masked[i,...])
         #print('data and gradients')
-        #print(data[...,i,index1 -1 : index1 +2,index0 -1: index0 +2 ])
-        #print(gradient)
-        if gradient[0].mask.any() == True or gradient[1].mask.any() == True: return None
-        gradients.append(np.sqrt(gradient[0].data[1,1]**2 + gradient[1].data[1,1]**2))
+        #print(masked[i,index1,index0])
+        #print(gradient[0].mask[index1,index0])
+        if gradient[0].mask[index1,index0] == True or gradient[1].mask[index1,index0] == True: return None
+        gradients.append(np.sqrt(np.square(gradient[0][index1,index0]) + np.square(gradient[1][index1, index0])))
     return gradients
 
 def find_data(data, index, calculate_gradients=False):
@@ -487,10 +510,12 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                     d = find_data(data[:,:,:], (x,y), True)
                 else:
                     try:
-                        d_plankton = list(plankton['Calanus_finmarchicus'][:,y,x] )
+                        d_plankton = list(plankton['Calanus_finmarchicus'][0,y,x])
                         d = list(data[:,y,x])
+                        print(d, d_plankton)
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
                         d += calculate_gradient(data[:,:,:],y,x)
+                        
                     except Exception as e:
                         #print(traceback(e))
                         print('bad data, skipping')
@@ -541,7 +566,9 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                     try:
                         d_plankton = list(plankton['Calanus_finmarchicus'][:,y,x] )
                         d = list(data[:,y,x])
+                        #print(d, d_plankton)
                         print(d)
+                        #print(plankton['Calanus_finmarchicus'][0,y,x], data[:,y,x])
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
                         #grad = calculate_gradient(data,y,x)
                         #print('gradients: ', grad, d_plankton)
@@ -552,6 +579,7 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                         #traceback.print_exception(e)
                         #print('bad data, skipping')
                         continue
+                
                 #print('data: ', d, 'plankton data:' , d_plankton)
                 plankton_data.append(d_plankton)
                 predictive_oceanographic_variables.append(d) #add the oceanic data from the sqaures the vessel was in at the time
@@ -607,15 +635,26 @@ def get_validation_metrics(prediction, truth, cutoff):
     specificity = np.count_nonzero(np.invert(prediction[np.invert(truth)]))/np.count_nonzero(np.invert(truth))
     return sensitivity, specificity, accuracy
 
+def calculate_and_append_grads(d):
+    grads = []
+    vars = d.shape[0]
+    for i in range(vars):
+        grad = np.gradient(d[i,...])
+        grad = np.sqrt(np.square(grad[0]) + np.square(grad[1]))
+        grads.append(grad)
+    #print(d.shape,np.array(grads).shape)
+    return np.ma.masked_values(np.append(d, grads, axis=0), -32767) #it has another fill value, dont ask me why
+
 
 def validate(model, prediction, truth, cutoff):
     '''
     Validates a prediciton based on different metrics
     '''
+    sc = sklearn.preprocessing.StandardScaler()
     names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','Temperature gradient', \
      'Salinity gradient','w_east_gradient', 'u_east gradient','v_north_gradient','w_north_gradient','Calanus finmarchicus', \
         'Calanus finmarchicus gradient', 'Catch']
-    fig, axs = plt.subplots(1,2)
+    fig, axs = plt.subplots(2,2)
     fig.set_size_inches(10,10)
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
     nc = Dataset(localize_nc_file('nor4km_data',2021, 1,20 ))
@@ -625,14 +664,20 @@ def validate(model, prediction, truth, cutoff):
     sens, spec, acc = get_validation_metrics(prediction, truth, cutoff)
 
     plankton = Dataset(localize_plankton_file('plankton_data', 2021, 1, 20))['Calanus_finmarchicus']
-    data = np.append(data, plankton, axis=0)
-    grads = []
-    for i in range(len(VARIABLES) +1):
-        grad = np.gradient(data[i,:,:])
-        grad = np.sqrt(np.square(grad[0].data) + np.square(grad[0].data))
-        grads.append(grad)
 
-    data = np.append(data, grads, axis = 0)
+    masked = np.ma.masked_values(data, FILL_VALUE)
+    masked = np.ma.masked_values(masked,  9.96921e+36) #to mask depth as well
+    data = calculate_and_append_grads(masked)
+    plankton = calculate_and_append_grads(plankton)
+    data = np.append(data, plankton, axis = 0)
+    data = np.ma.masked_values(data, -32767)
+    #print(data.shape)
+    #print(sc.fit_transform(data[0,...]).shape)
+
+    #TODO: normalize data?????
+
+    #data = np.array([sc.fit_transform(data[i,...]) for i in range(data.shape[0])])
+    #print(data.shape)
     pred = np.zeros((620,941))
     try:
         pred = np.array( [model(torch.tensor(data[:,i,:].T,dtype=torch.float32)).detach().numpy() for i in range(620)])
@@ -642,7 +687,7 @@ def validate(model, prediction, truth, cutoff):
             #print("yes")
         except:
             pred = np.array( [model.predict(h2o.H2OFrame(data[:,i,:].T, column_names = names)).as_data_frame().to_numpy()[:,:] for i in range(620)])
-    print(model)
+    print(pred.shape)
     if len(pred.shape) > 2:pred = pred[...,0]
     #pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH] = _pred
     #pred = _pred
@@ -657,15 +702,15 @@ def validate(model, prediction, truth, cutoff):
     predictions = [pred[x_y[i][0], x_y[i][1]] for i in range(len(x_y))]
 
     print("Amount of correct predictions on given day: ", np.count_nonzero(np.array(predictions))/len(predictions))
-    print_on_map(pred , catch_data,normalize=False, ax=axs[0])
+    print_on_map(pred , catch_data,normalize=False, ax=axs[0,0])
     
-    axs[0].set_title('Herring prediction')
-    #print_on_map(data[0,...], ax = axs[1,0], cb_label = 'Temperature low to high', normalize=False)
-    #axs[1,0].set_title('Temperature')
-    #print_on_map(data[-2,...], ax = axs[0,1], cb_label = "Plankton density low to high",normalize=False)
-    #axs[0,1].set_title('Plankton distribution')
-    axs[1].set_title('Prediction histogram')
-    axs[1].hist(pred)
+    axs[0,0].set_title('Herring prediction')
+    print_on_map(data[-1,...], ax = axs[1,0], cb_label = 'Plankton grad', normalize=True)
+    axs[1,0].set_title('Temperature')
+    print_on_map(data[-2,...], ax = axs[0,1], cb_label = "PLankton",normalize=True)
+    axs[0,1].set_title('Plankton distribution')
+    #axs[1].set_title('Prediction histogram')
+    #axs[1].hist(pred)
     #,ax = axs[1,1])
     
     plt.show()
@@ -711,14 +756,14 @@ if __name__ == '__main__':
     #print_on_map(temperature, catch_data=get_relevant_catch_data_csv('cleaned_datasets', 2021, 1, 1 ))
     #print(f"predicted response:\n{y_pred}")
     #plt.show()
-    folder = 'dataset_1_closest_grid_cells'
-    VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
+    folder = 'dataset_2_skip_bad_cells'
+    VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east', 'depth']
     #read_and_store_dataset(2021, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2021', 'target_jan_2021' )
     #read_and_store_dataset(2020, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2020', 'target_jan_2020' )
-    #for year in range(2019, 2022):
-     #   read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
-      #  os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_january_' + str(year)),use_closest_grid_cell=False,replace=True)
+    for year in range(2019, 2022):
+        read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
+        os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_january_' + str(year)),use_closest_grid_cell=False,replace=True)
     for year in range(2019, 2022):
         read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'december_' + str(year)+'_ocean_data'), \
-            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=True,replace=True)
+            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False,replace=True)
     
