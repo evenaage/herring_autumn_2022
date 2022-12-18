@@ -314,6 +314,8 @@ def calculate_gradient(data, index1, index0):
     variables = data.shape[0]
     #print(variables)
     masked = np.ma.masked_values(data, FILL_VALUE)
+    masked = np.ma.masked_values(masked, -32767)
+    masked = np.ma.masked_values(masked, 9.96921e+36 )
     for i in range(variables):
         gradient = np.gradient(masked[i,...])
         #print('data and gradients')
@@ -511,6 +513,7 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                 else:
                     try:
                         d_plankton = list(plankton['Calanus_finmarchicus'][0,y,x])
+                        if d_plankton[0] < 0 : d_plankton[0] =0
                         d = list(data[:,y,x])
                         print(d, d_plankton)
                         d_plankton += calculate_gradient(plankton['Calanus_finmarchicus'], y, x)
@@ -565,6 +568,9 @@ def read_and_store_dataset(year, month, variables, filename_ocean_data, filename
                 else:
                     try:
                         d_plankton = list(plankton['Calanus_finmarchicus'][:,y,x] )
+                        if d_plankton[0] < 0 : d_plankton[0] =0
+                        print(d_plankton)
+
                         d = list(data[:,y,x])
                         #print(d, d_plankton)
                         print(d)
@@ -615,7 +621,9 @@ def load_and_combine_data(year, month,folder):
         target = np.load(os.path.join(folder,'target_december_' +  str(year)+ '.npy'), allow_pickle=True)
     data = np.append(data, plankton, axis=1)
     target = np.array([target[i].iloc[0] if isinstance(target[i], pd.Series) else target[i] for i in range(len(target))])
-
+    xs, ys = np.where(np.isnan(data))
+    for i in range(len(xs)):
+        data[xs[i], ys[i]] = 0
     return data, target
 
 def predict_per_grid_cell(model, ocean_data):
@@ -628,6 +636,7 @@ def predict_per_grid_cell(model, ocean_data):
 
 
 def get_validation_metrics(prediction, truth, cutoff):
+    print(prediction.shape, truth.shape)
     prediction = np.array([True if prediction[i] > cutoff else False for i in range(len(prediction))])
     truth = np.array([True if truth[i] == 1 else False for i in range(len(truth))])
     accuracy = np.count_nonzero(prediction ==truth)/len(truth)
@@ -646,17 +655,18 @@ def calculate_and_append_grads(d):
     return np.ma.masked_values(np.append(d, grads, axis=0), -32767) #it has another fill value, dont ask me why
 
 
-def validate(model, prediction, truth, cutoff):
+def validate(model, prediction, truth, cutoff, show_plot = True):
     '''
     Validates a prediciton based on different metrics
     '''
     sc = sklearn.preprocessing.StandardScaler()
-    names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','Temperature gradient', \
-     'Salinity gradient','w_east_gradient', 'u_east gradient','v_north_gradient','w_north_gradient','Calanus finmarchicus', \
+    names = ['Temperature',  'Salinity', 'u_east', 'v_north',  'w_north', 'w_east','depth','Temperature gradient', \
+     'Salinity gradient', 'u_east gradient','v_north_gradient','w_north_gradient','w_east_gradient','depth_gradient','Calanus finmarchicus', \
         'Calanus finmarchicus gradient', 'Catch']
-    fig, axs = plt.subplots(2,2)
-    fig.set_size_inches(10,10)
-    VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east']
+    if show_plot: 
+        fig, axs = plt.subplots(1,2)
+        fig.set_size_inches(10,10)
+    VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east', 'depth']
     nc = Dataset(localize_nc_file('nor4km_data',2021, 1,20 ))
     data = get_relevant_data_nc(nc,VARIABLES,12)
     mask = np.load(os.path.join('util' ,'sinmod_land_sea_mask'), allow_pickle=True)
@@ -671,46 +681,68 @@ def validate(model, prediction, truth, cutoff):
     plankton = calculate_and_append_grads(plankton)
     data = np.append(data, plankton, axis = 0)
     data = np.ma.masked_values(data, -32767)
+    data = np.ma.masked_values(data, 9.96921e+36)
     #print(data.shape)
     #print(sc.fit_transform(data[0,...]).shape)
 
     #TODO: normalize data?????
+    print('Sensitivity: ', sens, ' Specificity: ', spec,' Accuracy: ', acc)
 
+    
+    #axs[1].set_title('Prediction confusion matrix')
+    if not show_plot : sklearn.metrics.ConfusionMatrixDisplay.from_predictions(truth, prediction)
+
+    if not show_plot: return
     #data = np.array([sc.fit_transform(data[i,...]) for i in range(data.shape[0])])
+    for i in range(data.shape[0]):
+        m = data[i,YC_LOW:YC_HIGH,XC_LOW:XC_HIGH].mean()
+        #print(data[i,...].max(), data[i,...].min())
+        std = data[i,YC_LOW:YC_HIGH,XC_LOW:XC_HIGH].var()
+        data[i,YC_LOW:YC_HIGH,XC_LOW:XC_HIGH] = (   data[i,YC_LOW:YC_HIGH,XC_LOW:XC_HIGH]- m)/std
     #print(data.shape)
+    def _convert_h2oframe_to_numeric(h2o_frame, training_columns):
+        for column in training_columns:
+            h2o_frame[column] = h2o_frame[column].asnumeric()
+        return h2o_frame
     pred = np.zeros((620,941))
     try:
-        pred = np.array( [model(torch.tensor(data[:,i,:].T,dtype=torch.float32)).detach().numpy() for i in range(620)])
+        _pred = np.array( [model(torch.tensor(data[:,i,XC_LOW:XC_HIGH].T,dtype=torch.float32)).detach().numpy() for i in range(YC_LOW,YC_HIGH)])[...,0]
     except:
         try:
-            pred = np.array( [model.predict(data[:,i,:].T) for i in range(620)])
+            _pred = np.array( [model.predict(data[:,i,XC_LOW:XC_HIGH].T) for i in range(YC_LOW,YC_HIGH)])
             #print("yes")
         except:
-            pred = np.array( [model.predict(h2o.H2OFrame(data[:,i,:].T, column_names = names)).as_data_frame().to_numpy()[:,:] for i in range(620)])
-    print(pred.shape)
-    if len(pred.shape) > 2:pred = pred[...,0]
-    #pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH] = _pred
+            _pred = np.array( [model.predict(_convert_h2oframe_to_numeric(h2o.H2OFrame(data[:,i,XC_LOW:XC_HIGH].T, column_names = names),names[:-1])).as_data_frame().to_numpy() for i in range(YC_LOW,YC_HIGH)])
+    #print(pred.shape)
+    if len(_pred.shape) > 2:
+        p = np.zeros((620,941,3))
+        p[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH,:] = _pred
+        print_on_map(p[...,1])
+        print_on_map(p[...,2])
+        _pred = _pred[...,0]
+    pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH] = _pred
     #pred = _pred
 
-    data = np.reshape(data, (14, 620, 941))
+    data = np.reshape(data, (16, 620, 941))
 
-    print("Non zero predictions in norwegian economic zone:" , np.count_nonzero(np.ma.masked_array(pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH],mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH])))
-    print('Sensitivity: ', sens, ' Specificity: ', spec,' Accuracy: ', acc)
+    #print("Non zero predictions in norwegian economic zone:" , np.count_nonzero(np.ma.masked_array(pred[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH],mask[YC_LOW:YC_HIGH,XC_LOW:XC_HIGH])))
+
 
     catch_data = get_relevant_catch_data_csv('cleaned_datasets', 2021,1,20 )
     x_y = [ll2xy(r['latitude'], r['longitude']) for _,r in catch_data.iterrows()]
     predictions = [pred[x_y[i][0], x_y[i][1]] for i in range(len(x_y))]
 
     print("Amount of correct predictions on given day: ", np.count_nonzero(np.array(predictions))/len(predictions))
-    print_on_map(pred , catch_data,normalize=False, ax=axs[0,0])
+    print_on_map(pred , catch_data,normalize=False)#, ax=axs[0])
     
-    axs[0,0].set_title('Herring prediction')
-    print_on_map(data[-1,...], ax = axs[1,0], cb_label = 'Plankton grad', normalize=True)
-    axs[1,0].set_title('Temperature')
-    print_on_map(data[-2,...], ax = axs[0,1], cb_label = "PLankton",normalize=True)
-    axs[0,1].set_title('Plankton distribution')
-    #axs[1].set_title('Prediction histogram')
+    axs[0].set_title('Herring prediction')
+    #print_on_map(data[-1,...], ax = axs[1,0], cb_label = 'Plankton grad', normalize=True)
+    #axs[1,0].set_title('Temperature')
+    #print_on_map(data[-2,...], ax = axs[0,1], cb_label = "PLankton",normalize=True)
+    #axs[0,1].set_title('Plankton distribution')
+    axs[1].set_title('Prediction confusion matrix')
     #axs[1].hist(pred)
+    sklearn.metrics.ConfusionMatrixDisplay.from_predictions(truth, prediction,ax=axs[1])
     #,ax = axs[1,1])
     
     plt.show()
@@ -760,10 +792,18 @@ if __name__ == '__main__':
     VARIABLES = ['temperature','salinity','u_east', 'v_north',  'w_north', 'w_east', 'depth']
     #read_and_store_dataset(2021, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2021', 'target_jan_2021' )
     #read_and_store_dataset(2020, 1,VARIABLES, '6_vars_+_plankton_15_depth_layers_january2020', 'target_jan_2020' )
-    for year in range(2019, 2022):
+    '''for year in range(2019, 2022):
         read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
         os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_january_' + str(year)),use_closest_grid_cell=False,replace=True)
     for year in range(2019, 2022):
         read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'december_' + str(year)+'_ocean_data'), \
             os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=False,replace=True)
+'''
+    folder = 'dataset_1_closest_grid_cells'
+    #for year in range(2020, 2022):
+     #   read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'january_' + str(year)+'_ocean_data'), \
+     #   os.path.join(folder, 'plankton_january_'+str(year)) ,os.path.join(folder, 'target_january_' + str(year)),use_closest_grid_cell=True,replace=True)
+    for year in range(2019, 2022):
+        read_and_store_dataset(year, 1, VARIABLES, os.path.join(folder, 'december_' + str(year)+'_ocean_data'), \
+            os.path.join(folder, 'plankton_december_'+str(year)) ,os.path.join(folder, 'target_december_' + str(year)),use_closest_grid_cell=True,replace=True)
     
